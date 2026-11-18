@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Permite ler os textos visíveis das ofertas do Uber e 99 para calcular indicadores de rentabilidade. Os dados são processados e armazenados localmente no aparelho.</string>
+</resources>

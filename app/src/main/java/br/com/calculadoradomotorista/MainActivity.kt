@@ -1,62 +1,751 @@
+
 package br.com.calculadoradomotorista
 
 import android.os.Bundle
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private val Verde = Color(0xFF168447)
+private val Amarelo = Color(0xFFD99A00)
+private val Vermelho = Color(0xFFC62828)
+
+// Identidade visual Fresh Modern
+private val CoresFreshModern = lightColorScheme(
+    primary = Color(0xFF35B99A),
+    onPrimary = Color(0xFFFFFFFF),
+    secondary = Color(0xFF2B8F78),
+    onSecondary = Color(0xFFFFFFFF),
+    tertiary = Color(0xFFF2C45B),
+    onTertiary = Color(0xFF594414),
+    background = Color(0xFFFFF9F1),
+    onBackground = Color(0xFF29443A),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF29443A),
+    surfaceVariant = Color(0xFFEAF5EE),
+    onSurfaceVariant = Color(0xFF60796E),
+    secondaryContainer = Color(0xFFDDF3E8),
+    onSecondaryContainer = Color(0xFF245B49),
+    outline = Color(0xFFB7CEC2),
+    error = Color(0xFFC62828),
+    onError = Color(0xFFFFFFFF)
+)
+
+private val FormasFreshModern = Shapes(
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(18.dp),
+    large = RoundedCornerShape(24.dp)
+)
+
+enum class Nivel(val pontos: Double, val descricao: String) {
+    VERMELHO(1.0, "VERMELHO"),
+    AMARELO(2.0, "AMARELO"),
+    VERDE(3.0, "VERDE")
+}
+
+data class Oferta(
+    val data: String,
+    val valor: Double,
+    val distancia: Double,
+    val minutos: Double,
+    val porKm: Double,
+    val porHora: Double,
+    val avaliacao: Double?,
+    val nivelKm: Nivel,
+    val nivelHora: Nivel,
+    val nivelAvaliacao: Nivel?,
+    val nivelGeral: Nivel,
+    val origem: String = "Manual"
+)
 
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         setContent {
-            MaterialTheme {
+            MaterialTheme(
+                colorScheme = CoresFreshModern,
+                shapes = FormasFreshModern
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "Calculadora do Motorista",
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Text(
-                            text = "Seu copiloto inteligente para avaliar corridas.",
-                            fontSize = 16.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "Primeira versão em construção."
-                        )
-                    }
+                    Aplicativo(this)
                 }
             }
         }
     }
+}
+
+@Composable
+fun Aplicativo(context: Context) {
+
+    val preferencias = remember {
+        context.getSharedPreferences("motorista_config", Context.MODE_PRIVATE)
+    }
+
+    var tela by remember {
+        mutableStateOf(
+            if (preferencias.getBoolean("assistente_concluido", false))
+                "analisar"
+            else
+                "assistente"
+        )
+    }
+
+    var valor by remember { mutableStateOf("") }
+    var distanciaBusca by remember { mutableStateOf("") }
+    var distanciaViagem by remember { mutableStateOf("") }
+    var minutos by remember { mutableStateOf("") }
+    var avaliacao by remember { mutableStateOf("") }
+
+    var referenciaKm by remember {
+        mutableStateOf(preferencias.getString("km", "1.50") ?: "1.50")
+    }
+    var referenciaHora by remember {
+        mutableStateOf(preferencias.getString("hora", "30.00") ?: "30.00")
+    }
+    var referenciaAvaliacao by remember {
+        mutableStateOf(preferencias.getString("avaliacao", "4.85") ?: "4.85")
+    }
+    var toleranciaDinheiro by remember {
+        mutableStateOf(preferencias.getString("tolerancia_dinheiro", "10") ?: "10")
+    }
+    var toleranciaAvaliacao by remember {
+        mutableStateOf(preferencias.getString("tolerancia_avaliacao", "0.05") ?: "0.05")
+    }
+
+    val historico = remember {
+        mutableStateListOf<Oferta>().apply {
+            addAll(carregarHistorico(preferencias))
+        }
+    }
+
+    DisposableEffect(preferencias) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener {
+                _, chave ->
+            if (chave == "historico") {
+                val atualizado = carregarHistorico(preferencias)
+                historico.clear()
+                historico.addAll(atualizado)
+            }
+        }
+
+        preferencias.registerOnSharedPreferenceChangeListener(listener)
+
+        onDispose {
+            preferencias.unregisterOnSharedPreferenceChangeListener(listener)
+        }
+    }
+
+    var ultimaAnalise by remember { mutableStateOf<Oferta?>(null) }
+    var mensagem by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+
+        Text(
+            "Calculadora do Motorista",
+            fontSize = 25.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.secondary
+        )
+
+        Text(
+            "Análise inteligente de corridas",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                "analisar" to "Analisar",
+                "historico" to "Histórico",
+                "config" to "Configurações"
+            ).forEach { (id, nome) ->
+                Button(
+                    onClick = { tela = id },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(5.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (tela == id)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = if (tela == id)
+                            MaterialTheme.colorScheme.onPrimary
+                        else
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                ) {
+                    Text(nome, fontSize = 11.sp)
+                }
+            }
+        }
+
+        HorizontalDivider()
+
+        when (tela) {
+
+            "assistente" -> {
+                AssistenteConfiguracao(
+                    context = context,
+                    onAbrirParametros = {
+                        tela = "config"
+                    },
+                    onConcluir = {
+                        preferencias.edit()
+                            .putBoolean("assistente_concluido", true)
+                            .apply()
+                        tela = "analisar"
+                    }
+                )
+            }
+
+            "analisar" -> {
+
+                Text(
+                    "Dados da oferta",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Campo("Valor oferecido (R$)", valor) { valor = it }
+
+                Campo("Distância até o passageiro (km)", distanciaBusca) {
+                    distanciaBusca = it
+                }
+
+                Campo("Distância da viagem (km)", distanciaViagem) {
+                    distanciaViagem = it
+                }
+
+                Campo("Tempo total estimado (minutos)", minutos) {
+                    minutos = it
+                }
+
+                Campo("Avaliação do passageiro (opcional)", avaliacao) {
+                    avaliacao = it
+                }
+
+                Text(
+                    "O tempo deve considerar o deslocamento até o passageiro e a viagem.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Button(
+                    onClick = {
+                        val preco = converterNumero(valor)
+                        val busca = converterNumero(distanciaBusca)
+                        val viagem = converterNumero(distanciaViagem)
+                        val tempo = converterNumero(minutos)
+                        val nota = converterNumero(avaliacao)
+
+                        val distanciaTotal = busca + viagem
+
+                        if (preco <= 0 || distanciaTotal <= 0 || tempo <= 0) {
+                            mensagem = "Preencha valor, distâncias e tempo corretamente."
+                            ultimaAnalise = null
+                        } else if (avaliacao.isNotBlank() && (nota < 0 || nota > 5)) {
+                            mensagem = "A avaliação deve estar entre 0 e 5."
+                            ultimaAnalise = null
+                        } else {
+                            val porKm = preco / distanciaTotal
+                            val porHora = preco / (tempo / 60.0)
+
+                            val toleranciaDin = converterNumero(toleranciaDinheiro) / 100.0
+                            val toleranciaNota = converterNumero(toleranciaAvaliacao)
+
+                            val nivelKm = classificar(
+                                porKm,
+                                converterNumero(referenciaKm),
+                                toleranciaDin
+                            )
+
+                            val nivelHora = classificar(
+                                porHora,
+                                converterNumero(referenciaHora),
+                                toleranciaDin
+                            )
+
+                            val nivelNota = if (avaliacao.isNotBlank()) {
+                                classificar(
+                                    nota,
+                                    converterNumero(referenciaAvaliacao),
+                                    toleranciaNota
+                                )
+                            } else null
+
+                            val pontos = mutableListOf(
+                                nivelKm.pontos,
+                                nivelHora.pontos
+                            )
+
+                            if (nivelNota != null) {
+                                pontos.add(nivelNota.pontos)
+                            }
+
+                            val media = pontos.average()
+
+                            val geral = when {
+                                media >= 2.5 -> Nivel.VERDE
+                                media >= 1.5 -> Nivel.AMARELO
+                                else -> Nivel.VERMELHO
+                            }
+
+                            val data = SimpleDateFormat(
+                                "dd/MM/yyyy HH:mm",
+                                Locale("pt", "BR")
+                            ).format(Date())
+
+                            val oferta = Oferta(
+                                data = data,
+                                valor = preco,
+                                distancia = distanciaTotal,
+                                minutos = tempo,
+                                porKm = porKm,
+                                porHora = porHora,
+                                avaliacao = if (avaliacao.isBlank()) null else nota,
+                                nivelKm = nivelKm,
+                                nivelHora = nivelHora,
+                                nivelAvaliacao = nivelNota,
+                                nivelGeral = geral
+                            )
+
+                            ultimaAnalise = oferta
+                            historico.add(0, oferta)
+                            salvarHistorico(preferencias, historico)
+                            mensagem = "Oferta analisada e salva no histórico."
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("ANALISAR CORRIDA")
+                }
+
+                if (mensagem.isNotBlank()) {
+                    Text(mensagem, color = MaterialTheme.colorScheme.primary)
+                }
+
+                ultimaAnalise?.let { oferta ->
+                    HorizontalDivider()
+
+                    Text(
+                        "Resultado da análise",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text("R$ ${formatar(oferta.valor)} pela corrida")
+
+                            Text(
+                                "Distância total: ${formatar(oferta.distancia)} km"
+                            )
+
+                            HorizontalDivider()
+
+                            Indicador("Reais por km", oferta.porKm, oferta.nivelKm, "/km")
+
+                            Indicador("Reais por hora", oferta.porHora, oferta.nivelHora, "/h")
+
+                            if (oferta.avaliacao != null && oferta.nivelAvaliacao != null) {
+                                Indicador(
+                                    "Avaliação do passageiro",
+                                    oferta.avaliacao,
+                                    oferta.nivelAvaliacao,
+                                    " estrelas"
+                                )
+                            }
+
+                            HorizontalDivider()
+
+                            Text("CLASSIFICAÇÃO GERAL", fontWeight = FontWeight.Bold)
+
+                            Text(
+                                oferta.nivelGeral.descricao,
+                                color = corNivel(oferta.nivelGeral),
+                                fontSize = 28.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        valor = ""
+                        distanciaBusca = ""
+                        distanciaViagem = ""
+                        minutos = ""
+                        avaliacao = ""
+                        ultimaAnalise = null
+                        mensagem = ""
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Limpar corrida")
+                }
+            }
+
+            "config" -> {
+
+                Text(
+                    "Critérios do motorista",
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    "Personalize os valores conforme sua cidade e seus objetivos.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedButton(
+                    onClick = { tela = "assistente" },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("ABRIR ASSISTENTE DE CONFIGURAÇÃO")
+                }
+
+                Campo("Meta de reais por quilômetro (R$)", referenciaKm) {
+                    referenciaKm = it
+                }
+
+                Campo("Meta de reais por hora (R$)", referenciaHora) {
+                    referenciaHora = it
+                }
+
+                Campo("Avaliação de referência (0 a 5)", referenciaAvaliacao) {
+                    referenciaAvaliacao = it
+                }
+
+                HorizontalDivider()
+
+                Text("Faixas de tolerância", fontWeight = FontWeight.Bold)
+
+                Campo("Tolerância financeira (%)", toleranciaDinheiro) {
+                    toleranciaDinheiro = it
+                }
+
+                Campo("Tolerância da avaliação (pontos)", toleranciaAvaliacao) {
+                    toleranciaAvaliacao = it
+                }
+
+                Text(
+                    "Exemplo: com meta de R$ 1,50/km e tolerância de 10%, " +
+                        "abaixo de R$ 1,35 será vermelho, entre R$ 1,35 e R$ 1,65 " +
+                        "será amarelo e acima de R$ 1,65 será verde.",
+                    fontSize = 12.sp
+                )
+
+                Button(
+                    onClick = {
+                        val km = converterNumero(referenciaKm)
+                        val hora = converterNumero(referenciaHora)
+                        val nota = converterNumero(referenciaAvaliacao)
+                        val tolDin = converterNumero(toleranciaDinheiro)
+                        val tolNota = converterNumero(toleranciaAvaliacao)
+
+                        if (
+                            km <= 0 || hora <= 0 ||
+                            nota <= 0 || nota > 5 ||
+                            tolDin < 0 || tolDin > 100 ||
+                            tolNota < 0 || tolNota > 5
+                        ) {
+                            mensagem = "Confira os valores informados."
+                        } else {
+                            preferencias.edit()
+                                .putString("km", referenciaKm)
+                                .putString("hora", referenciaHora)
+                                .putString("avaliacao", referenciaAvaliacao)
+                                .putString("tolerancia_dinheiro", toleranciaDinheiro)
+                                .putString("tolerancia_avaliacao", toleranciaAvaliacao)
+                                .apply()
+
+                            mensagem = "Configurações salvas com sucesso!"
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("SALVAR MINHAS CONFIGURAÇÕES")
+                }
+
+                if (mensagem.isNotBlank()) {
+                    Text(mensagem, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            "historico" -> {
+
+                Text(
+                    "Histórico de ofertas",
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    "Cada análise realizada fica registrada neste aparelho.",
+                    fontSize = 13.sp
+                )
+
+                if (historico.isEmpty()) {
+                    Text("Nenhuma oferta analisada ainda.")
+                } else {
+                    historico.forEach { oferta ->
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(oferta.data, fontSize = 12.sp)
+
+                                if (oferta.origem != "Manual") {
+                                    Text(
+                                        "Origem: ${oferta.origem}",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+
+                                Text(
+                                    "R$ ${formatar(oferta.valor)}",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                Text(
+                                    "${formatar(oferta.distancia)} km | " +
+                                        "R$ ${formatar(oferta.porKm)}/km"
+                                )
+
+                                Text("R$ ${formatar(oferta.porHora)}/hora")
+
+                                Text(
+                                    "Geral: ${oferta.nivelGeral.descricao}",
+                                    color = corNivel(oferta.nivelGeral),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            historico.clear()
+                            salvarHistorico(preferencias, historico)
+                            ultimaAnalise = null
+                            mensagem = "Histórico apagado."
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Apagar histórico")
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            "Criado por Alan Cleverson",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End
+        )
+    }
+}
+
+@Composable
+fun Campo(
+    titulo: String,
+    valor: String,
+    aoAlterar: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = valor,
+        onValueChange = aoAlterar,
+        label = { Text(titulo) },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Decimal
+        ),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+fun Indicador(
+    titulo: String,
+    valor: Double,
+    nivel: Nivel,
+    unidade: String
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(titulo, fontSize = 14.sp)
+        Text(
+            "${formatar(valor)}$unidade",
+            fontSize = 21.sp,
+            fontWeight = FontWeight.Bold,
+            color = corNivel(nivel)
+        )
+        Text(
+            nivel.descricao,
+            color = corNivel(nivel),
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp
+        )
+    }
+}
+
+fun classificar(
+    valor: Double,
+    referencia: Double,
+    tolerancia: Double
+): Nivel {
+    val limiteInferior = referencia * (1.0 - tolerancia)
+    val limiteSuperior = referencia * (1.0 + tolerancia)
+
+    return when {
+        valor < limiteInferior -> Nivel.VERMELHO
+        valor <= limiteSuperior -> Nivel.AMARELO
+        else -> Nivel.VERDE
+    }
+}
+
+fun corNivel(nivel: Nivel): Color {
+    return when (nivel) {
+        Nivel.VERMELHO -> Vermelho
+        Nivel.AMARELO -> Amarelo
+        Nivel.VERDE -> Verde
+    }
+}
+
+fun converterNumero(valor: String): Double {
+    val limpo = valor
+        .replace("R$", "")
+        .replace(" ", "")
+        .let {
+            if (it.contains(",")) {
+                it.replace(".", "").replace(",", ".")
+            } else {
+                it
+            }
+        }
+
+    return limpo.toDoubleOrNull() ?: 0.0
+}
+
+fun formatar(valor: Double): String {
+    return String.format(Locale("pt", "BR"), "%.2f", valor)
+}
+
+fun salvarHistorico(
+    preferencias: android.content.SharedPreferences,
+    historico: List<Oferta>
+) {
+    val array = JSONArray()
+
+    historico.forEach { oferta ->
+        val item = JSONObject()
+
+        item.put("data", oferta.data)
+        item.put("valor", oferta.valor)
+        item.put("distancia", oferta.distancia)
+        item.put("minutos", oferta.minutos)
+        item.put("porKm", oferta.porKm)
+        item.put("porHora", oferta.porHora)
+        item.put("avaliacao", oferta.avaliacao ?: JSONObject.NULL)
+        item.put("nivelKm", oferta.nivelKm.name)
+        item.put("nivelHora", oferta.nivelHora.name)
+        item.put("nivelAvaliacao", oferta.nivelAvaliacao?.name ?: JSONObject.NULL)
+        item.put("nivelGeral", oferta.nivelGeral.name)
+        item.put("origem", oferta.origem)
+
+        array.put(item)
+    }
+
+    preferencias.edit()
+        .putString("historico", array.toString())
+        .apply()
+}
+
+fun carregarHistorico(
+    preferencias: android.content.SharedPreferences
+): MutableList<Oferta> {
+    val lista = mutableListOf<Oferta>()
+
+    try {
+        val texto = preferencias.getString("historico", "[]") ?: "[]"
+        val array = JSONArray(texto)
+
+        for (i in 0 until array.length()) {
+            val item = array.getJSONObject(i)
+
+            val nota = if (item.isNull("avaliacao")) {
+                null
+            } else {
+                item.getDouble("avaliacao")
+            }
+
+            val nivelNota = if (item.isNull("nivelAvaliacao")) {
+                null
+            } else {
+                Nivel.valueOf(item.getString("nivelAvaliacao"))
+            }
+
+            lista.add(
+                Oferta(
+                    data = item.getString("data"),
+                    valor = item.getDouble("valor"),
+                    distancia = item.getDouble("distancia"),
+                    minutos = item.getDouble("minutos"),
+                    porKm = item.getDouble("porKm"),
+                    porHora = item.getDouble("porHora"),
+                    avaliacao = nota,
+                    nivelKm = Nivel.valueOf(item.getString("nivelKm")),
+                    nivelHora = Nivel.valueOf(item.getString("nivelHora")),
+                    nivelAvaliacao = nivelNota,
+                    nivelGeral = Nivel.valueOf(item.getString("nivelGeral")),
+                    origem = item.optString("origem", "Manual")
+                )
+            )
+        }
+    } catch (_: Exception) {
+        // Se houver histórico inválido, inicia uma lista vazia.
+    }
+
+    return lista
 }
